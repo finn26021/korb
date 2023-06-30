@@ -1,0 +1,189 @@
+#include <ESP8266WiFi.h>
+#include <ESP8266WebServer.h>
+#include <ArduinoJson.h>    // Neue Bibliothek für JSON
+
+const char* ssid = "ToddelsWLANNetzGastzugang";
+const char* password = "WLANGast";
+
+ESP8266WebServer server(80);
+
+const int buttonPin = D3;             // Anpassen des Pins entsprechend der Pinbelegung auf deinem NodeMCU
+const int resetButtonPin = D4;        // Anpassen des Pins für den Reset-Button
+const int ultrasonicTriggerPin = D5;  // Anpassen des Trigger-Pins des Ultraschallsensors
+const int ultrasonicEchoPin = D6;     // Anpassen des Echo-Pins des Ultraschallsensors
+
+int alleWuerfeCounter = 0;
+int getroffeneWuerfeCounter = 0;
+bool buttonState = HIGH;
+bool lastButtonState = HIGH;
+bool buttonPressed = false;
+
+void handleRoot() {
+  String html = "<html><head>";
+  html += "<style>";
+  html += "body { background-color: #1a1a1a; color: #ffffff; font-family: 'Roboto', sans-serif; }";
+  html += "h1 { font-size: 28px; font-weight: bold; text-align: center; }";
+  html += "#alle-wuerfe { font-size: 36px; text-align: center; }";
+  html += "#getroffene-wuerfe { font-size: 24px; text-align: center; }";
+  html += "#chart-container { width: 600px; height: 400px; margin: 0 auto; }";  // Größeres Chart-Container
+  html += "#button-container { text-align: center; }";
+  html += "button { background-color: #333333; color: #ffffff; border: none; padding: 10px 20px; font-size: 16px; cursor: pointer; text-align: center; }";
+  html += "</style>";
+  html += "<script src='https://cdn.jsdelivr.net/npm/chart.js@3.5.1'></script>";
+  html += "</head><body>";
+  html += "<h1>Alle W&uuml;rfe: <span id='alle-wuerfe'>" + String(alleWuerfeCounter) + "</span></h1>";
+  html += "<h2 id='getroffene-wuerfe'>Davon getroffen: " + String(getroffeneWuerfeCounter) + "</h2>";
+  html += "<div id='chart-container'>";
+  html += "<canvas id='chart'></canvas>";
+  html += "</div>";
+  html += "<div id='button-container'>";
+  html += "<button onclick='resetCounter()'>Zur&uuml;cksetzen</button>";
+  html += "<div id='wurfquote'>Wurfquote: 0%</div>"; // Neue Division für die Wurfquote
+  html += "</div>";
+  html += "<script>";
+  html += "var chartData = {";
+  html += "  labels: [],";
+  html += "  datasets: [{";
+  html += "    label: 'Wurfquote',";
+  html += "    data: [],";
+  html += "    backgroundColor: 'rgba(75, 192, 192, 0.2)',";
+  html += "    borderColor: 'rgba(75, 192, 192, 1)',";
+  html += "    borderWidth: 1";
+  html += "  }]";
+  html += "};";
+  html += "var chartOptions = {";
+  html += "  responsive: true,";
+  html += "  maintainAspectRatio: false,";
+  html += "  scales: {";
+  html += "    y: {";
+  html += "      beginAtZero: true,";
+  html += "      suggestedMax: 100";
+  html += "    }";
+  html += "  }";
+  html += "};";
+  html += "var ctx = document.getElementById('chart').getContext('2d');";
+  html += "var chart = new Chart(ctx, {";
+  html += "  type: 'line',";
+  html += "  data: chartData,";
+  html += "  options: chartOptions";
+  html += "});";
+  html += "function updateCounter() {";
+  html += "  var xhttp = new XMLHttpRequest();";
+  html += "  xhttp.onreadystatechange = function() {";
+  html += "    if (this.readyState == 4 && this.status == 200) {";
+  html += "      var counters = JSON.parse(this.responseText);";
+  html += "      document.getElementById('alle-wuerfe').textContent = counters.alleWuerfe;";
+  html += "      document.getElementById('getroffene-wuerfe').textContent = 'Davon getroffen: ' + counters.getroffeneWuerfe;";
+  html += "      var wurfquote = (counters.getroffeneWuerfe / counters.alleWuerfe) * 100;";
+  html += "      chart.data.labels.push('');";
+  html += "      chart.data.datasets[0].data.push(wurfquote);";
+  html += "      chart.update();";
+  html += "      updateWurfquote();"; // Wurfquote aktualisieren
+  html += "    }";
+  html += "  };";
+  html += "  xhttp.open('GET', '/counters', true);";
+  html += "  xhttp.send();";
+  html += "}";
+  html += "function resetCounter() {";
+  html += "  var xhttp = new XMLHttpRequest();";
+  html += "  xhttp.onreadystatechange = function() {";
+  html += "    if (this.readyState == 4 && this.status == 200) {";
+  html += "      chart.data.labels = [];";  // Zurücksetzen der Chart-Daten
+  html += "      chart.data.datasets[0].data = [];";
+  html += "      chart.update();";  // Chart aktualisieren
+  html += "      updateWurfquote();"; // Wurfquote aktualisieren
+  html += "    }";
+  html += "  };";
+  html += "  xhttp.open('GET', '/reset', true);";
+  html += "  xhttp.send();";
+  html += "}";
+  html += "function updateWurfquote() {"; // Neue Funktion zum Aktualisieren der Wurfquote
+  html += "  var wurfquoteElement = document.getElementById('wurfquote');";
+  html += "  var wurfquote = (chart.data.datasets[0].data.slice(-1)[0] || 0).toFixed(2);";
+  html += "  wurfquoteElement.textContent = 'Wurfquote: ' + wurfquote + '%';";
+  html += "}";
+  html += "setInterval(updateCounter, 2000);";
+  html += "</script>";
+  html += "</body></html>";
+  server.send(200, "text/html", html);
+}
+
+
+
+
+void handleCounters() {
+  String countersJson = "{\"alleWuerfe\": " + String(alleWuerfeCounter) + ", \"getroffeneWuerfe\": " + String(getroffeneWuerfeCounter) + "}";
+  server.send(200, "application/json", countersJson);
+}
+
+void handleReset() {
+  alleWuerfeCounter = 0;
+  getroffeneWuerfeCounter = 0;
+  server.send(200, "text/plain", "Counter zurückgesetzt");
+}
+
+void setup() {
+  Serial.begin(115200);
+  
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(1000);
+    Serial.println("Verbindung zum WiFi-Netzwerk wird hergestellt...");
+  }
+  
+  Serial.println("WiFi-Verbindung hergestellt");
+  Serial.print("IP-Adresse: ");
+  Serial.println(WiFi.localIP());
+  
+  pinMode(buttonPin, INPUT_PULLUP);
+  pinMode(resetButtonPin, INPUT_PULLUP);
+  pinMode(ultrasonicTriggerPin, OUTPUT);
+  pinMode(ultrasonicEchoPin, INPUT);
+  
+  server.on("/", handleRoot);
+  server.on("/counters", handleCounters);
+  server.on("/reset", handleReset);
+  server.begin();
+  Serial.println("HTTP-Server gestartet");
+}
+
+void loop() {
+  server.handleClient();
+  
+  buttonState = digitalRead(buttonPin);
+  
+  if (buttonState != lastButtonState) {
+    if (buttonState == LOW) {
+      if (!buttonPressed) {
+        alleWuerfeCounter++;
+        Serial.print("Taster wurde gedrückt! Alle Würfe: ");
+        Serial.println(alleWuerfeCounter);
+        buttonPressed = true;
+      }
+    } else {
+      buttonPressed = false;
+    }
+  }
+  
+  lastButtonState = buttonState;
+  
+  // Ultraschallsensor-Messung
+  long duration;
+  int distance;
+  
+  digitalWrite(ultrasonicTriggerPin, LOW);
+  delayMicroseconds(2);
+  digitalWrite(ultrasonicTriggerPin, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(ultrasonicTriggerPin, LOW);
+  
+  duration = pulseIn(ultrasonicEchoPin, HIGH);
+  distance = duration * 0.034 / 2;
+  
+  if (distance < 30) {
+    getroffeneWuerfeCounter++;
+    Serial.print("Ziel getroffen! Getroffene Würfe: ");
+    Serial.println(getroffeneWuerfeCounter);
+  }
+  delay(60);
+}
